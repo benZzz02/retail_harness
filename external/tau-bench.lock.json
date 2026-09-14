@@ -1,0 +1,8 @@
+{
+  "name": "tau-bench",
+  "repository": "https://github.com/sierra-research/tau-bench.git",
+  "commit": "59a200c6d575d595120f1cb70fea53cef0632f6b",
+  "domain": "retail",
+  "role": "external environment, tools, data and reward",
+  "note": "Pinned legacy MVP adapter; this is not the newer tau2/tau3 implementation."
+}
