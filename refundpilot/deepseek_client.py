@@ -38,10 +38,17 @@ class DeepSeekStructuredClient:
         self.strict_schema = strict_schema
         self.function_name = function_name
         self._opener = opener or urlopen
+        self.last_call_metrics: Dict[str, Any] = {}
 
     def complete(self, prompt: str, schema_path: Path) -> str:
         if not schema_path.exists():
             raise RuntimeError("structured output schema is missing: %s" % schema_path)
+
+        self.last_call_metrics = {
+            "prompt_chars": len(prompt),
+            "output_chars": 0,
+            "usage": None,
+        }
 
         payload: Dict[str, Any] = {
             "model": self.model,
@@ -93,6 +100,8 @@ class DeepSeekStructuredClient:
 
         try:
             result = json.loads(raw_response)
+            if isinstance(result.get("usage"), dict):
+                self.last_call_metrics["usage"] = dict(result["usage"])
             message = result["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
             if self.strict_schema and tool_calls:
@@ -103,4 +112,5 @@ class DeepSeekStructuredClient:
             raise RuntimeError("DeepSeek API returned an invalid response") from exc
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("DeepSeek API returned empty message content")
+        self.last_call_metrics["output_chars"] = len(content)
         return content

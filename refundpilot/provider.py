@@ -15,7 +15,9 @@ from .contracts import (
     ToolObservation,
 )
 from .codex_client import CodexStructuredClient
+from .context_view import build_context_payload
 from .deepseek_client import DeepSeekStructuredClient
+from .policy import RetailActionGate
 
 
 class AgentProvider(Protocol):
@@ -134,13 +136,17 @@ class CodexCliProvider:
         timeout_seconds: int = 180,
         additional_instructions: str = "",
         multi_turn: bool = False,
+        context_mode: str = "compact",
         executable: Optional[str] = None,
     ) -> None:
+        if context_mode not in {"compact", "full"}:
+            raise ValueError("context_mode must be 'compact' or 'full'")
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
         self.additional_instructions = additional_instructions
         self.multi_turn = multi_turn
+        self.context_mode = context_mode
         self.name = "codex-cli:%s" % model
         self._client = CodexStructuredClient(
             model=model,
@@ -186,20 +192,13 @@ class CodexCliProvider:
         return ToolAction(tool_name=tool_name, arguments=arguments)
 
     def _build_prompt(self, context: AgentContext) -> str:
-        history = [item.to_dict() for item in context.observations]
-        payload = {
-            "step": context.step,
-            "max_steps": context.max_steps,
-            "retail_policy": context.system_instructions,
-            "runtime_note": self.additional_instructions,
-            "user_task": context.user_request,
-            "conversation": list(context.conversation),
-            "available_tools": list(context.tool_schemas),
-            "observations": history,
-            "harness_derived_facts": self._derive_observation_facts(
-                context.observations
-            ),
-        }
+        payload = build_context_payload(
+            context, compact=self.context_mode == "compact"
+        )
+        payload["runtime_note"] = self.additional_instructions
+        payload["harness_derived_facts"] = self._derive_observation_facts(
+            context.observations
+        )
         action_guidance = (
             "Use type=final to send exactly one natural-language turn to the "
             "customer. A final action does not necessarily end the session: use "
@@ -318,6 +317,7 @@ class DeepSeekProvider(CodexCliProvider):
         timeout_seconds: int = 180,
         additional_instructions: str = "",
         multi_turn: bool = False,
+        context_mode: str = "compact",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         max_retries: int = 2,
@@ -327,6 +327,9 @@ class DeepSeekProvider(CodexCliProvider):
         self.timeout_seconds = timeout_seconds
         self.additional_instructions = additional_instructions
         self.multi_turn = multi_turn
+        if context_mode not in {"compact", "full"}:
+            raise ValueError("context_mode must be 'compact' or 'full'")
+        self.context_mode = context_mode
         self.max_retries = max(0, max_retries)
         self.name = "deepseek:%s" % model
         self._client = DeepSeekStructuredClient(
@@ -461,6 +464,11 @@ class DeepSeekProvider(CodexCliProvider):
     def _validation_error(
         cls, context: AgentContext, action: AgentAction
     ) -> Optional[str]:
+        decision = RetailActionGate(
+            require_confirmation=False
+        ).check(context, action)
+        if not decision.allowed:
+            return decision.message
         if isinstance(action, ToolAction):
             operation_error = cls._delivered_operation_validation_error(
                 context, action
@@ -527,14 +535,13 @@ class DeepSeekProvider(CodexCliProvider):
         return prompt + "\n\n" + instruction
 
     def next_action(self, context: AgentContext) -> AgentAction:
-        feedback = ""
-        for _ in range(self.max_retries + 1):
-            raw = self._client.complete(
-                self._strict_prompt(self._build_prompt(context), feedback),
-                self._schema_path,
-            )
-            action = self.decode_action(raw)
-            feedback = self._validation_error(context, action) or ""
-            if not feedback:
-                return action
-        raise ValueError("DeepSeek action failed semantic validation: %s" % feedback)
+        # Semantic validation belongs to the provider-neutral runtime gate. The
+        # provider therefore makes one model request per turn; a rejected action
+        # is returned to the model as a harness observation on the next turn.
+        # This keeps Codex and DeepSeek on the same control path and prevents a
+        # provider-specific retry loop from silently multiplying API spend.
+        raw = self._client.complete(
+            self._strict_prompt(self._build_prompt(context)),
+            self._schema_path,
+        )
+        return self.decode_action(raw)

@@ -236,6 +236,10 @@ class CodexCliUserSimulator:
                     ) from exc
         raise AssertionError("unreachable")
 
+    def will_call_model(self, agent_message: str) -> bool:
+        """Expose whether a response can be served by deterministic grounding."""
+        return self._grounded_auth_response(str(agent_message)) is None
+
     def reset(self, instruction: Optional[str] = None) -> str:
         if instruction is None:
             raise ValueError("user simulator requires a hidden task instruction")

@@ -16,7 +16,10 @@ for task_index in 0 1 2 3 4 5 6 7 8 9; do
     --task "$task_index" \
     --model gpt-5.6-luna \
     --reasoning low \
-    --max-steps 20; then
+    --max-steps 20 \
+    --context-mode compact \
+    --gate-mode guarded \
+    --max-model-calls 16; then
     passed=$((passed + 1))
   else
     failed=$((failed + 1))

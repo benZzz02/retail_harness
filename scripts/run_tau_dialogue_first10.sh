@@ -20,7 +20,10 @@ for task_index in 0 1 2 3 4 5 6 7 8 9; do
     --agent-model gpt-5.6-luna \
     --user-model gpt-5.6-luna \
     --reasoning low \
-    --max-steps 30 2>&1 | tee "$log_dir/task-$task_index.log"
+    --max-steps 30 \
+    --context-mode compact \
+    --gate-mode guarded \
+    --max-model-calls 40 2>&1 | tee "$log_dir/task-$task_index.log"
   status=${PIPESTATUS[0]}
   if [[ "$status" -eq 0 ]]; then
     passed=$((passed + 1))

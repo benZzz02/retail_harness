@@ -1,7 +1,10 @@
-"""RefundPilot: a minimal harness over an external Retail environment."""
+"""RefundPilot: a business-safety harness over an external Retail environment."""
 
+from .budget import RunBudget, UsageLedger
 from .cases import load_cases
+from .context_view import build_context_payload
 from .environment import RetailEnvironment
+from .policy import GateDecision, RetailActionGate
 from .provider import (
     CodexCliProvider,
     DeepSeekProvider,
@@ -18,13 +21,18 @@ __all__ = [
     "CodexCliUserSimulator",
     "DeepSeekProvider",
     "DeepSeekUserSimulator",
+    "GateDecision",
     "HarnessRuntime",
     "OracleReplayProvider",
     "RetailEnvironment",
+    "RetailActionGate",
+    "RunBudget",
     "RuleBasedProvider",
     "TauHarnessRuntime",
     "TauDialogueRuntime",
     "TauRetailEnvironment",
+    "UsageLedger",
+    "build_context_payload",
     "load_cases",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

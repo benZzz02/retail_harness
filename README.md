@@ -5,6 +5,23 @@ Sierra Research 的外部 **τ-bench Retail** 环境；用户、订单、商品�
 状态变化和最终 reward 都来自上游仓库。多轮模式额外连接隐藏指令用户模拟器，
 用于测试确认、改口和终止协议。
 
+当前 v0.3 的重点不是再包一层 benchmark runner，而是把电商售后最容易出事故的
+运行时问题做成可观察、可阻断、可回放的 Harness：
+
+- `RetailActionGate` 是与模型无关的业务安全门，统一拦截空参数、未读订单就写、
+  未读商品就换、跨支付方式退款，以及同一订单同时退货和换货；
+- `off / audit / guarded` 三种模式分别对应关闭、只记录、拦截并把结构化反馈送回
+  下一轮模型；安全策略不依赖 DeepSeek、Codex 或某个 SDK；
+- `compact` 上下文视图去掉对话中重复的 tool payload，同时保留结构化 observation
+  和确定性商品事实；
+- 每个 session 有硬性的 `max_model_calls`，并把 agent/user 调用、字符数、实际或
+  估算 token 数写进轨迹，避免多轮失败变成不可控的 API 账单。
+
+这对应的业务痛点是：售后操作会改变订单状态，确认后的改口会使旧授权失效，错误的
+支付方式或重复的退换操作可能在环境中产生不可逆影响，而长工具结果又会推高每轮
+上下文成本。模型只是可替换的决策器，真正负责“能不能执行、执行后发生了什么、是否
+能解释和回放”的是 Harness。
+
 本项目只负责模型外围的运行层：
 
 - 把外部工具 schema 转成统一的 `AgentContext`；
@@ -45,7 +62,8 @@ actions，因此输出明确标记为 **ORACLE WIRING CHECK**。它证明“环�
 
 ```bash
 .venv/bin/python -m refundpilot tau-llm \
-  --split test --task 0 --model gpt-5.6-luna --reasoning low
+  --split test --task 0 --model gpt-5.6-luna --reasoning low \
+  --context-mode compact --gate-mode guarded --max-model-calls 16
 ```
 
 该模式每轮只向模型提供 Retail policy、工具 schema、任务和已有 observation，
@@ -70,8 +88,10 @@ export DEEPSEEK_API_KEY="<your-key>"
 ```
 
 DeepSeek Agent 适配器和隐藏指令用户模拟器都使用官方 OpenAI-compatible Chat
-Completions endpoint 的 strict function-call schema；用户模拟器对空首轮和提前停止
-还会做语义重试，Agent action 发送到外部环境前会校验 required 参数。也可以通过
+Completions endpoint 的 strict function-call schema；Agent action 发送到外部环境前
+统一经过与模型无关的 `RetailActionGate`。语义违规不会在 Provider 内部隐式重试，
+而是记录为 `gate_rejected` 并作为 harness observation 进入下一轮上下文，从而让
+Codex 和 DeepSeek 遵循同一条控制路径。也可以通过
 `DEEPSEEK_BASE_URL` 指向兼容的代理服务。API key 只从环境变量读取，不会写入轨迹或
 仓库。接口说明见
 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
@@ -89,7 +109,8 @@ Completions endpoint 的 strict function-call schema；用户模拟器对空首�
   --split test --task 5 \
   --agent-model gpt-5.6-luna \
   --user-model gpt-5.6-luna \
-  --reasoning low --max-steps 30
+  --reasoning low --max-steps 30 \
+  --context-mode compact --gate-mode guarded --max-model-calls 40
 ```
 
 此时 Agent 看不到 task instruction，只能看到模拟用户逐轮说出的内容。确认后的
@@ -121,7 +142,8 @@ export DEEPSEEK_API_KEY="<your-key>"
 ```
 
 如果需要两边都使用 DeepSeek，将 `--user-provider deepseek --user-model
-deepseek-chat` 即可。原有 Codex 命令和默认行为保持不变。
+deepseek-chat` 即可。原有 Codex 命令和 Provider 边界保持不变；只需替换 provider，
+不需要修改 Retail 环境、工具协议、业务安全门或评测器。
 
 命令结束会打印 session id。轨迹可回放：
 
@@ -175,6 +197,26 @@ TauRetailEnvironment ─────► external tau_bench.Env.step(...)
 来源信息，不暴露 gold actions。只有显式的 `OracleReplayProvider` 会读取 gold
 actions，且运行记录带 `evaluation_label=wiring_only`。
 
+## 面向面试的设计口径
+
+可以把本项目概括成“面向电商售后事务安全的 Stateful Agent Harness”。通用运行核
+负责 session、上下文、预算、事件和 provider 替换；Retail policy layer 负责读后写、
+确认、支付和退换冲突；外部 tau-bench 负责真实数据、工具副作用和官方终态 reward。
+
+一次被拦截的动作会形成如下闭环：
+
+```text
+model action
+    -> RetailActionGate
+       -> allowed: external tool -> observation -> next turn
+       -> rejected: gate_rejected + harness observation -> model repairs
+```
+
+因此 Harness 的测试重点不是训练曲线，而是运行时契约：错误动作不穿透、状态变更可
+追踪、预算可控、轨迹可回放、替换模型后控制边界不漂移。`tau-smoke` 仍然明确标记
+为 **ORACLE WIRING CHECK**；它只证明外部环境接线和官方 reward 正常，不冒充模型
+成绩。模型能力只用小规模 blind smoke 做功能验证，不把一次运行包装成 benchmark。
+
 ## 上游版本说明
 
 为了让这个 MVP 在 Python 3.11 上最少改动地运行，当前锁定的是 Sierra 官方
@@ -199,7 +241,8 @@ legacy `tau-bench` 仓库的 commit：
 
 测试覆盖：外部数据确实加载、工具 schema 数量、未知工具失败、LLM 结构化动作
 解析、用户模拟器身份 grounding、多轮 respond 路由、完成后继续的对话违规、
-官方 gold actions 得到 reward 1.0，以及 trajectory 可回放。系统 Python 未安装
+官方 gold actions 得到 reward 1.0、trajectory 可回放，以及 v2 的安全门、上下文
+压缩、确认失效、预算上限和 guarded recovery。系统 Python 未安装
 `tau_bench` 时，外部集成测试会跳过，不会假装通过。
 
 2026-09-13 的单任务真实 LLM smoke：`gpt-5.6-luna` 在未看到 gold actions 的

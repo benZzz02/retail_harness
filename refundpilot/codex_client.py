@@ -25,10 +25,17 @@ class CodexStructuredClient:
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
+        self.last_call_metrics = {}
 
     def complete(self, prompt: str, schema_path: Path) -> str:
         if not schema_path.exists():
             raise RuntimeError("structured output schema is missing: %s" % schema_path)
+
+        self.last_call_metrics = {
+            "prompt_chars": len(prompt),
+            "output_chars": 0,
+            "usage": None,
+        }
 
         with tempfile.TemporaryDirectory(prefix="refundpilot-codex-") as directory:
             output_path = Path(directory) / "response.json"
@@ -72,4 +79,6 @@ class CodexStructuredClient:
                 )
             if not output_path.exists():
                 raise RuntimeError("Codex structured call produced no response")
-            return output_path.read_text(encoding="utf-8")
+            result = output_path.read_text(encoding="utf-8")
+            self.last_call_metrics["output_chars"] = len(result)
+            return result

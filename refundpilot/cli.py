@@ -35,6 +35,7 @@ def _agent_provider(
     model: str,
     reasoning_effort: str,
     multi_turn: bool = False,
+    context_mode: str = "compact",
     additional_instructions: str = "",
 ):
     if provider_name == "deepseek":
@@ -42,12 +43,14 @@ def _agent_provider(
             model=model,
             reasoning_effort=reasoning_effort,
             multi_turn=multi_turn,
+            context_mode=context_mode,
             additional_instructions=additional_instructions,
         )
     return CodexCliProvider(
         model=model,
         reasoning_effort=reasoning_effort,
         multi_turn=multi_turn,
+        context_mode=context_mode,
         additional_instructions=additional_instructions,
     )
 
@@ -292,6 +295,9 @@ def _tau_llm(
     model: str,
     reasoning_effort: str,
     max_steps: int,
+    context_mode: str,
+    gate_mode: str,
+    max_model_calls: int,
 ) -> int:
     print("=== BLIND ONE-TURN LLM RUN — GOLD ACTIONS HIDDEN ===")
     print(
@@ -304,6 +310,7 @@ def _tau_llm(
             provider_name=provider_name,
             model=model,
             reasoning_effort=reasoning_effort,
+            context_mode=context_mode,
             additional_instructions=(
                 "This is a one-turn offline LLM smoke test with no live user "
                 "simulator. Treat the user's initial explicit request to make a "
@@ -320,6 +327,8 @@ def _tau_llm(
         provider=provider,
         runtime_dir=runtime_dir,
         max_steps=max_steps,
+        gate_mode=gate_mode,
+        max_model_calls=max_model_calls,
     ).run(environment)
     print("\n[%s/%d] %s" % (task_split, task_index, environment.instruction))
     for index, observation in enumerate(result.observations, start=1):
@@ -338,7 +347,11 @@ def _tau_llm(
         )
     task_success = (
         result.official_reward == 1.0
-        and all(item.result.get("ok") for item in result.observations)
+        and all(
+            item.result.get("ok")
+            for item in result.observations
+            if item.tool_name != "__harness_action_gate__"
+        )
         and result.outcome != "runtime_error"
     )
     print("Final: %s | %s" % (result.outcome, result.message))
@@ -348,6 +361,15 @@ def _tau_llm(
             result.official_reward,
             "PASS" if task_success else "FAIL",
             result.session_id,
+        )
+    )
+    print(
+        "Gate rejections: %d | model calls: %d | estimated tokens: in=%d out=%d"
+        % (
+            result.gate_rejections,
+            result.budget.get("model_calls", 0),
+            result.budget.get("estimated_input_tokens", 0),
+            result.budget.get("estimated_output_tokens", 0),
         )
     )
     return 0 if task_success else 1
@@ -363,6 +385,9 @@ def _tau_dialogue(
     user_model: str,
     reasoning_effort: str,
     max_steps: int,
+    context_mode: str,
+    gate_mode: str,
+    max_model_calls: int,
 ) -> int:
     print("=== MULTI-TURN LLM RUN — HIDDEN USER INSTRUCTION ===")
     print(
@@ -376,6 +401,7 @@ def _tau_dialogue(
             model=agent_model,
             reasoning_effort=reasoning_effort,
             multi_turn=True,
+            context_mode=context_mode,
             additional_instructions=(
                 "This is a multi-turn retail conversation. You cannot see the "
                 "user simulator's hidden instruction. Follow the Retail policy "
@@ -400,6 +426,8 @@ def _tau_dialogue(
         user_simulator=user_simulator,
         runtime_dir=runtime_dir,
         max_steps=max_steps,
+        gate_mode=gate_mode,
+        max_model_calls=max_model_calls,
     ).run(environment)
     print("\n[%s/%d] visible conversation" % (task_split, task_index))
     for item in result.conversation:
@@ -428,13 +456,15 @@ def _tau_dialogue(
             )
     print(
         "Official reward: %.1f | dialogue=%s | steps=%d | user_turns=%d | "
-        "completion_continuations=%d | session=%s"
+        "completion_continuations=%d | gate_rejections=%d | model_calls=%d | session=%s"
         % (
             result.official_reward,
             "PASS" if result.task_success else "FAIL",
             result.steps,
             result.user_turns,
             result.premature_completion_continuations,
+            result.gate_rejections,
+            result.budget.get("model_calls", 0),
             result.session_id,
         )
     )
@@ -494,6 +524,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--reasoning", choices=("low", "medium", "high"), default="low"
     )
     tau_llm_parser.add_argument("--max-steps", type=int, default=10)
+    tau_llm_parser.add_argument(
+        "--context-mode", choices=("compact", "full"), default="compact"
+    )
+    tau_llm_parser.add_argument(
+        "--gate-mode", choices=("off", "audit", "guarded"), default="guarded"
+    )
+    tau_llm_parser.add_argument("--max-model-calls", type=int, default=16)
     tau_dialogue_parser = subparsers.add_parser(
         "tau-dialogue", help="run agent and hidden-instruction user simulator"
     )
@@ -513,6 +550,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--reasoning", choices=("low", "medium", "high"), default="low"
     )
     tau_dialogue_parser.add_argument("--max-steps", type=int, default=30)
+    tau_dialogue_parser.add_argument(
+        "--context-mode", choices=("compact", "full"), default="compact"
+    )
+    tau_dialogue_parser.add_argument(
+        "--gate-mode", choices=("off", "audit", "guarded"), default="guarded"
+    )
+    tau_dialogue_parser.add_argument("--max-model-calls", type=int, default=40)
     return parser
 
 
@@ -541,6 +585,9 @@ def main(argv: Iterable[str] = None) -> int:
             args.model,
             args.reasoning,
             args.max_steps,
+            args.context_mode,
+            args.gate_mode,
+            args.max_model_calls,
         )
     if args.command == "tau-dialogue":
         return _tau_dialogue(
@@ -553,5 +600,8 @@ def main(argv: Iterable[str] = None) -> int:
             args.user_model,
             args.reasoning,
             args.max_steps,
+            args.context_mode,
+            args.gate_mode,
+            args.max_model_calls,
         )
     return 2
