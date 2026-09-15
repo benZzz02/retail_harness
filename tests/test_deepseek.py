@@ -4,7 +4,12 @@ import json
 import unittest
 from pathlib import Path
 
-from refundpilot.contracts import AgentContext, FinalAction, ToolAction
+from refundpilot.contracts import (
+    AgentContext,
+    FinalAction,
+    ToolAction,
+    ToolObservation,
+)
 from refundpilot.deepseek_client import DeepSeekStructuredClient
 from refundpilot.provider import DeepSeekProvider
 from refundpilot.user_simulator import DeepSeekUserSimulator
@@ -172,6 +177,47 @@ class DeepSeekClientTest(unittest.TestCase):
 
         self.assertIn("first_name", error or "")
         self.assertIn("last_name", error or "")
+
+    def test_provider_rejects_cross_payment_refund_before_environment(self) -> None:
+        context = AgentContext(
+            session_id="test",
+            user_request="return the item and refund to PayPal",
+            tool_schemas=(),
+            observations=(
+                ToolObservation(
+                    tool_name="get_order_details",
+                    arguments={"order_id": "#W1"},
+                    result={
+                        "output": {
+                            "observation": json.dumps(
+                                {
+                                    "order_id": "#W1",
+                                    "payment_history": [
+                                        {"payment_method_id": "credit_card_1"}
+                                    ],
+                                }
+                            )
+                        }
+                    },
+                ),
+            ),
+            step=2,
+            max_steps=30,
+        )
+        error = DeepSeekProvider._validation_error(
+            context,
+            ToolAction(
+                "return_delivered_order_items",
+                {
+                    "order_id": "#W1",
+                    "item_ids": ["item-1"],
+                    "payment_method_id": "paypal_1",
+                },
+            ),
+        )
+
+        self.assertIn("credit_card_1", error or "")
+        self.assertIn("paypal_1", error or "")
 
     def test_user_simulator_retries_empty_opening_turn(self) -> None:
         simulator = DeepSeekUserSimulator(

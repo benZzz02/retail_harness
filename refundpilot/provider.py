@@ -279,8 +279,82 @@ class DeepSeekProvider(CodexCliProvider):
         )
 
     @staticmethod
-    def _validation_error(context: AgentContext, action: AgentAction) -> Optional[str]:
+    def _observed_json(observation: ToolObservation) -> Optional[dict]:
+        raw = observation.result.get("output", {}).get("observation")
+        if not isinstance(raw, str):
+            return None
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    @classmethod
+    def _payment_validation_error(
+        cls, context: AgentContext, action: ToolAction
+    ) -> Optional[str]:
+        if action.tool_name not in {
+            "return_delivered_order_items",
+            "exchange_delivered_order_items",
+            "modify_pending_order_items",
+            "modify_pending_order_payment",
+        }:
+            return None
+        payment_method_id = action.arguments.get("payment_method_id")
+        order_id = action.arguments.get("order_id")
+        if not isinstance(payment_method_id, str) or not payment_method_id:
+            return None
+
+        order_details = None
+        user_details = None
+        for observation in context.observations:
+            if observation.tool_name != "get_order_details" and observation.tool_name != "get_user_details":
+                continue
+            payload = cls._observed_json(observation)
+            if not payload:
+                continue
+            if observation.tool_name == "get_order_details":
+                if order_id is None or payload.get("order_id") == order_id:
+                    order_details = payload
+            else:
+                user_details = payload
+        if order_details is None:
+            return None
+
+        original_ids = {
+            entry.get("payment_method_id")
+            for entry in order_details.get("payment_history", [])
+            if isinstance(entry, dict) and entry.get("payment_method_id")
+        }
+        if payment_method_id in original_ids:
+            return None
+
+        known_gift_cards = set()
+        if user_details:
+            for method_id, method in user_details.get("payment_methods", {}).items():
+                if isinstance(method, dict) and method.get("source") == "gift_card":
+                    known_gift_cards.add(method_id)
+        if payment_method_id in known_gift_cards:
+            return None
+        return (
+            "Do not call %s with payment_method_id %s: the order's original "
+            "payment method is %s, and only an observed existing gift card is "
+            "also allowed. Ask the customer to choose a valid method first."
+            % (
+                action.tool_name,
+                payment_method_id,
+                ", ".join(sorted(original_ids)) or "unknown",
+            )
+        )
+
+    @classmethod
+    def _validation_error(
+        cls, context: AgentContext, action: AgentAction
+    ) -> Optional[str]:
         if isinstance(action, ToolAction):
+            payment_error = cls._payment_validation_error(context, action)
+            if payment_error:
+                return payment_error
             for schema in context.tool_schemas:
                 function = schema.get("function", {})
                 if function.get("name") != action.tool_name:
