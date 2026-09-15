@@ -248,6 +248,48 @@ class DeepSeekClientTest(unittest.TestCase):
 
         self.assertIn("mutually exclusive", error or "")
 
+    def test_provider_derives_exact_inventory_counts(self) -> None:
+        observation = ToolObservation(
+            tool_name="get_product_details",
+            arguments={"product_id": "p1"},
+            result={
+                "output": {
+                    "observation": json.dumps(
+                        {
+                            "product_id": "p1",
+                            "name": "T-Shirt",
+                            "variants": {
+                                "a": {
+                                    "item_id": "a",
+                                    "price": 10.0,
+                                    "available": True,
+                                    "options": {"color": "blue"},
+                                },
+                                "b": {
+                                    "item_id": "b",
+                                    "price": 8.0,
+                                    "available": False,
+                                    "options": {"color": "red"},
+                                },
+                                "c": {
+                                    "item_id": "c",
+                                    "price": 12.0,
+                                    "available": True,
+                                    "options": {"color": "green"},
+                                },
+                            },
+                        }
+                    )
+                }
+            },
+        )
+
+        facts = DeepSeekProvider._derive_observation_facts((observation,))
+
+        self.assertEqual(facts[0]["variant_count"], 3)
+        self.assertEqual(facts[0]["available_count"], 2)
+        self.assertEqual(facts[0]["cheapest_available"]["item_id"], "a")
+
     def test_user_simulator_retries_empty_opening_turn(self) -> None:
         simulator = DeepSeekUserSimulator(
             api_key="test-key",

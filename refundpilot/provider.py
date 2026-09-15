@@ -196,6 +196,9 @@ class CodexCliProvider:
             "conversation": list(context.conversation),
             "available_tools": list(context.tool_schemas),
             "observations": history,
+            "harness_derived_facts": self._derive_observation_facts(
+                context.observations
+            ),
         }
         action_guidance = (
             "Use type=final to send exactly one natural-language turn to the "
@@ -239,11 +242,66 @@ class CodexCliProvider:
             "shell commands, files, web browsing, or any tool outside the listed "
             "retail tools. Never invent IDs or facts. Use type=tool with one "
             "tool_name and a JSON-encoded object in arguments_json. "
+            "The harness_derived_facts field contains deterministic summaries "
+            "computed from successful observations; use it as the source of "
+            "truth for variant counts and unconstrained min/max prices. "
             + action_guidance
             + " For unused string fields return an empty string. Return only the "
             "object required by the output schema.\n\n"
             + json.dumps(payload, ensure_ascii=False, sort_keys=True)
         )
+
+    @staticmethod
+    def _derive_observation_facts(
+        observations: Sequence[ToolObservation],
+    ) -> list[dict]:
+        """Compute deterministic summaries from tool results for the LLM."""
+        facts = []
+        for observation in observations:
+            if observation.tool_name != "get_product_details":
+                continue
+            raw = observation.result.get("output", {}).get("observation")
+            if not isinstance(raw, str):
+                continue
+            try:
+                product = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(product, dict):
+                continue
+            variants = product.get("variants")
+            if not isinstance(variants, dict):
+                continue
+            entries = [
+                value
+                for value in variants.values()
+                if isinstance(value, dict)
+                and isinstance(value.get("price"), (int, float))
+            ]
+            available = [value for value in entries if value.get("available") is True]
+
+            def summarize(value: dict) -> dict:
+                return {
+                    "item_id": value.get("item_id"),
+                    "price": value.get("price"),
+                    "options": dict(value.get("options", {})),
+                }
+
+            fact = {
+                "product_id": product.get("product_id"),
+                "name": product.get("name"),
+                "variant_count": len(entries),
+                "available_count": len(available),
+            }
+            if available:
+                fact["cheapest_available"] = summarize(
+                    min(available, key=lambda value: value["price"])
+                )
+                fact["most_expensive_available"] = summarize(
+                    max(available, key=lambda value: value["price"])
+                )
+            facts.append(fact)
+        return facts
 
     def next_action(self, context: AgentContext) -> AgentAction:
         raw = self._client.complete(self._build_prompt(context), self._schema_path)
