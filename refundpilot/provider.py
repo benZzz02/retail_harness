@@ -221,7 +221,11 @@ class CodexCliProvider:
                 "before stating the amount; do not do financial arithmetic mentally. "
                 "For inventory counts, count the variants and their explicit "
                 "available fields from the product-details observation exactly; "
-                "never estimate stock counts or infer them from a single variant."
+                "never estimate stock counts or infer them from a single variant. "
+                "For one delivered order, return and exchange are mutually "
+                "exclusive because the environment permits only one such "
+                "operation; if the customer asks for both, ask them to choose "
+                "before executing either one."
             if self.multi_turn
             else (
                 "Use type=final when the task is complete. A final message must "
@@ -348,10 +352,63 @@ class DeepSeekProvider(CodexCliProvider):
         )
 
     @classmethod
+    def _delivered_operation_validation_error(
+        cls, context: AgentContext, action: ToolAction
+    ) -> Optional[str]:
+        operation_names = {
+            "return_delivered_order_items",
+            "exchange_delivered_order_items",
+        }
+        if action.tool_name not in operation_names:
+            return None
+        order_id = action.arguments.get("order_id")
+        if not isinstance(order_id, str) or not order_id:
+            return None
+
+        for observation in context.observations:
+            if (
+                observation.tool_name in operation_names
+                and observation.tool_name != action.tool_name
+                and observation.arguments.get("order_id") == order_id
+                and observation.result.get("ok")
+            ):
+                return (
+                    "Do not perform both a return and an exchange on delivered "
+                    "order %s. That order permits only one operation; explain "
+                    "the conflict and ask the customer to choose one."
+                    % order_id
+                )
+
+        latest_user_message = ""
+        for item in reversed(context.conversation):
+            if item.get("role") == "user":
+                latest_user_message = str(item.get("content", "")).lower()
+                break
+        if not latest_user_message:
+            latest_user_message = context.user_request.lower()
+        mentions_return = bool(re.search(r"\breturn(?:ed)?\b", latest_user_message))
+        mentions_exchange = bool(
+            re.search(r"\b(?:exchange|swap|replace)\w*\b", latest_user_message)
+        )
+        if mentions_return and mentions_exchange:
+            return (
+                "The customer mentions both a return and an exchange for the "
+                "same delivered-order request. These operations are mutually "
+                "exclusive on one order. Do not call a mutation yet; ask the "
+                "customer to choose exactly one operation."
+            )
+        return None
+
+    @classmethod
     def _validation_error(
         cls, context: AgentContext, action: AgentAction
     ) -> Optional[str]:
         if isinstance(action, ToolAction):
+            operation_error = cls._delivered_operation_validation_error(
+                context, action
+            )
+            if operation_error:
+                return operation_error
             payment_error = cls._payment_validation_error(context, action)
             if payment_error:
                 return payment_error

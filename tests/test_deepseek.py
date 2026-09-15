@@ -219,6 +219,35 @@ class DeepSeekClientTest(unittest.TestCase):
         self.assertIn("credit_card_1", error or "")
         self.assertIn("paypal_1", error or "")
 
+    def test_provider_rejects_return_and_exchange_same_request(self) -> None:
+        context = AgentContext(
+            session_id="test",
+            user_request="return the bottle and exchange the chair",
+            tool_schemas=(),
+            observations=(),
+            step=1,
+            max_steps=30,
+            conversation=(
+                {
+                    "role": "user",
+                    "content": "Return the bottle and exchange the chair.",
+                },
+            ),
+        )
+        error = DeepSeekProvider._validation_error(
+            context,
+            ToolAction(
+                "return_delivered_order_items",
+                {
+                    "order_id": "#W1",
+                    "item_ids": ["item-1"],
+                    "payment_method_id": "credit_card_1",
+                },
+            ),
+        )
+
+        self.assertIn("mutually exclusive", error or "")
+
     def test_user_simulator_retries_empty_opening_turn(self) -> None:
         simulator = DeepSeekUserSimulator(
             api_key="test-key",
