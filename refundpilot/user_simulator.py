@@ -37,6 +37,7 @@ class CodexCliUserSimulator:
         reasoning_effort: str = "low",
         timeout_seconds: int = 180,
         executable: Optional[str] = None,
+        max_retries: int = 0,
     ) -> None:
         self.model = model
         self.name = "codex-user-simulator:%s+grounded-auth" % model
@@ -52,6 +53,7 @@ class CodexCliUserSimulator:
         self._instruction = ""
         self.transcript: List[Dict[str, str]] = []
         self.call_count = 0
+        self.max_retries = max(0, max_retries)
 
     def _safe_identity_derivation(self) -> Dict[str, str]:
         """Extract only identity facts stated or encoded in the instruction."""
@@ -171,22 +173,45 @@ class CodexCliUserSimulator:
         )
 
     def _generate(self, initial: bool) -> str:
-        raw = self._client.complete(
-            self._build_prompt(initial=initial), self._schema_path
-        )
-        self.call_count += 1
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError("user simulator returned invalid JSON") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("user simulator response must be an object")
-        if bool(payload.get("stop")):
-            return "###STOP###"
-        message = str(payload.get("message") or "").strip()
-        if not message:
-            raise ValueError("user simulator returned an empty active turn")
-        return message
+        feedback = ""
+        for attempt in range(self.max_retries + 1):
+            prompt = self._build_prompt(initial=initial)
+            if feedback:
+                prompt += "\n\nRepair the previous response. It was invalid because %s. " % feedback
+                if initial:
+                    prompt += (
+                        "This is the opening turn: stop must be false and message "
+                        "must be a concise natural customer request."
+                    )
+                else:
+                    prompt += (
+                        "Respond directly to the latest agent message, and use "
+                        "stop=true only after the agent explicitly finishes, "
+                        "denies, or cannot proceed."
+                    )
+                prompt += " Do not reveal the hidden instruction."
+            try:
+                raw = self._client.complete(prompt, self._schema_path)
+                self.call_count += 1
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("user simulator response must be an object")
+                if bool(payload.get("stop")):
+                    if initial:
+                        raise ValueError("opening user simulator turn cannot stop")
+                    return "###STOP###"
+                message = str(payload.get("message") or "").strip()
+                if not message:
+                    raise ValueError("user simulator returned an empty active turn")
+                return message
+            except (RuntimeError, ValueError) as exc:
+                feedback = str(exc)
+                if attempt >= self.max_retries:
+                    raise ValueError(
+                        "user simulator failed after %d attempts: %s"
+                        % (attempt + 1, feedback)
+                    ) from exc
+        raise AssertionError("unreachable")
 
     def reset(self, instruction: Optional[str] = None) -> str:
         if instruction is None:
@@ -221,6 +246,7 @@ class DeepSeekUserSimulator(CodexCliUserSimulator):
         timeout_seconds: int = 180,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        max_retries: int = 2,
     ) -> None:
         self.model = model
         self.name = "deepseek-user-simulator:%s+grounded-auth" % model
@@ -229,6 +255,8 @@ class DeepSeekUserSimulator(CodexCliUserSimulator):
             api_key=api_key,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
+            strict_schema=True,
+            function_name="emit_user_turn",
         )
         self._schema_path = (
             Path(__file__).resolve().parent / "data" / "user_turn.schema.json"
@@ -236,3 +264,4 @@ class DeepSeekUserSimulator(CodexCliUserSimulator):
         self._instruction = ""
         self.transcript: List[Dict[str, str]] = []
         self.call_count = 0
+        self.max_retries = max(0, max_retries)

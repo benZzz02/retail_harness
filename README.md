@@ -69,8 +69,9 @@ export DEEPSEEK_API_KEY="<your-key>"
   --split test --task 0
 ```
 
-DeepSeek Agent 适配器使用官方 OpenAI-compatible Chat Completions endpoint 和
-strict function-call schema；隐藏指令用户模拟器使用 JSON Output。也可以通过
+DeepSeek Agent 适配器和隐藏指令用户模拟器都使用官方 OpenAI-compatible Chat
+Completions endpoint 的 strict function-call schema；用户模拟器对空首轮和提前停止
+还会做语义重试，Agent action 发送到外部环境前会校验 required 参数。也可以通过
 `DEEPSEEK_BASE_URL` 指向兼容的代理服务。API key 只从环境变量读取，不会写入轨迹或
 仓库。接口说明见
 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)

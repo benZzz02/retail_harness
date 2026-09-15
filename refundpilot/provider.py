@@ -268,6 +268,30 @@ class DeepSeekProvider(CodexCliProvider):
 
     @staticmethod
     def _validation_error(context: AgentContext, action: AgentAction) -> Optional[str]:
+        if isinstance(action, ToolAction):
+            for schema in context.tool_schemas:
+                function = schema.get("function", {})
+                if function.get("name") != action.tool_name:
+                    continue
+                parameters = function.get("parameters", {})
+                required = parameters.get("required", [])
+                missing = [
+                    name
+                    for name in required
+                    if name not in action.arguments
+                    or action.arguments.get(name) is None
+                    or (
+                        isinstance(action.arguments.get(name), str)
+                        and not action.arguments.get(name).strip()
+                    )
+                ]
+                if missing:
+                    return (
+                        "Do not call %s with empty required arguments: %s. "
+                        "Ask the customer for the missing information first."
+                        % (action.tool_name, ", ".join(missing))
+                    )
+                break
         if not isinstance(action, FinalAction):
             return None
         normalized = " ".join(action.message.lower().split()).strip(".!?")

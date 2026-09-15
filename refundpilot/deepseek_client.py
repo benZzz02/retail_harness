@@ -21,6 +21,7 @@ class DeepSeekStructuredClient:
         timeout_seconds: int = 180,
         max_tokens: int = 4096,
         strict_schema: bool = False,
+        function_name: str = "emit_agent_action",
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.model = model
@@ -35,6 +36,7 @@ class DeepSeekStructuredClient:
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max_tokens
         self.strict_schema = strict_schema
+        self.function_name = function_name
         self._opener = opener or urlopen
 
     def complete(self, prompt: str, schema_path: Path) -> str:
@@ -56,8 +58,8 @@ class DeepSeekStructuredClient:
                 {
                     "type": "function",
                     "function": {
-                        "name": "emit_agent_action",
-                        "description": "Return exactly one AgentAction for the harness.",
+                        "name": self.function_name,
+                        "description": "Return exactly one structured harness response.",
                         "parameters": schema,
                         "strict": True,
                     },
@@ -65,7 +67,7 @@ class DeepSeekStructuredClient:
             ]
             payload["tool_choice"] = {
                 "type": "function",
-                "function": {"name": "emit_agent_action"},
+                "function": {"name": self.function_name},
             }
         else:
             payload["response_format"] = {"type": "json_object"}

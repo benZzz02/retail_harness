@@ -4,9 +4,10 @@ import json
 import unittest
 from pathlib import Path
 
-from refundpilot.contracts import AgentContext, FinalAction
+from refundpilot.contracts import AgentContext, FinalAction, ToolAction
 from refundpilot.deepseek_client import DeepSeekStructuredClient
 from refundpilot.provider import DeepSeekProvider
+from refundpilot.user_simulator import DeepSeekUserSimulator
 
 
 class _FakeResponse:
@@ -140,6 +141,61 @@ class DeepSeekClientTest(unittest.TestCase):
         )
 
         self.assertIsNotNone(error)
+
+    def test_provider_rejects_empty_required_tool_arguments(self) -> None:
+        context = AgentContext(
+            session_id="test",
+            user_request="exchange an item",
+            tool_schemas=(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "find_user_id_by_name_zip",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["first_name", "last_name", "zip"],
+                        },
+                    },
+                },
+            ),
+            observations=(),
+            step=1,
+            max_steps=30,
+        )
+        error = DeepSeekProvider._validation_error(
+            context,
+            ToolAction(
+                "find_user_id_by_name_zip",
+                {"first_name": "", "last_name": "", "zip": "28236"},
+            ),
+        )
+
+        self.assertIn("first_name", error or "")
+        self.assertIn("last_name", error or "")
+
+    def test_user_simulator_retries_empty_opening_turn(self) -> None:
+        simulator = DeepSeekUserSimulator(
+            api_key="test-key",
+            base_url="https://example.test",
+            max_retries=1,
+        )
+
+        class FakeUserClient:
+            def __init__(self):
+                self.responses = [
+                    '{"message":"","stop":false}',
+                    '{"message":"I need help with my order.","stop":false}',
+                ]
+
+            def complete(self, prompt, schema_path):
+                return self.responses.pop(0)
+
+        simulator._client = FakeUserClient()
+        self.assertEqual(
+            simulator.reset("You are a customer who needs help."),
+            "I need help with my order.",
+        )
+        self.assertEqual(simulator.call_count, 2)
 
 
 if __name__ == "__main__":
