@@ -20,6 +20,7 @@ class DeepSeekStructuredClient:
         base_url: Optional[str] = None,
         timeout_seconds: int = 180,
         max_tokens: int = 4096,
+        strict_schema: bool = False,
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.model = model
@@ -33,6 +34,7 @@ class DeepSeekStructuredClient:
         ).rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max_tokens
+        self.strict_schema = strict_schema
         self._opener = opener or urlopen
 
     def complete(self, prompt: str, schema_path: Path) -> str:
@@ -42,10 +44,31 @@ class DeepSeekStructuredClient:
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "system", "content": prompt}],
-            "response_format": {"type": "json_object"},
             "max_tokens": self.max_tokens,
             "temperature": 0.0,
         }
+        if self.strict_schema:
+            try:
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError("structured output schema cannot be loaded") from exc
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "emit_agent_action",
+                        "description": "Return exactly one AgentAction for the harness.",
+                        "parameters": schema,
+                        "strict": True,
+                    },
+                }
+            ]
+            payload["tool_choice"] = {
+                "type": "function",
+                "function": {"name": "emit_agent_action"},
+            }
+        else:
+            payload["response_format"] = {"type": "json_object"}
         request = Request(
             self.base_url + "/chat/completions",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -68,7 +91,12 @@ class DeepSeekStructuredClient:
 
         try:
             result = json.loads(raw_response)
-            content = result["choices"][0]["message"].get("content")
+            message = result["choices"][0]["message"]
+            tool_calls = message.get("tool_calls") or []
+            if self.strict_schema and tool_calls:
+                content = tool_calls[0]["function"].get("arguments")
+            else:
+                content = message.get("content")
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
             raise RuntimeError("DeepSeek API returned an invalid response") from exc
         if not isinstance(content, str) or not content.strip():

@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
+from refundpilot.contracts import AgentContext, FinalAction
 from refundpilot.deepseek_client import DeepSeekStructuredClient
 from refundpilot.provider import DeepSeekProvider
 
@@ -82,6 +83,63 @@ class DeepSeekClientTest(unittest.TestCase):
         self.assertEqual(provider.name, "deepseek:deepseek-chat")
         self.assertEqual(action.tool_name, "get_order_details")
         self.assertEqual(action.arguments, {"order_id": "#W1"})
+
+    def test_strict_schema_uses_function_call_arguments(self) -> None:
+        captured = {}
+
+        def opener(request, timeout):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "function": {
+                                            "arguments": '{"type":"final"}'
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            )
+
+        schema = (
+            Path(__file__).resolve().parents[1]
+            / "refundpilot"
+            / "data"
+            / "agent_action.schema.json"
+        )
+        client = DeepSeekStructuredClient(
+            api_key="test-key",
+            base_url="https://example.test",
+            strict_schema=True,
+            opener=opener,
+        )
+
+        self.assertEqual(client.complete("return JSON", schema), '{"type":"final"}')
+        self.assertEqual(captured["body"]["tool_choice"]["function"]["name"], "emit_agent_action")
+        self.assertTrue(captured["body"]["tools"][0]["function"]["strict"])
+        self.assertNotIn("response_format", captured["body"])
+
+    def test_provider_rejects_premature_completion_placeholder(self) -> None:
+        context = AgentContext(
+            session_id="test",
+            user_request="exchange an item",
+            tool_schemas=(),
+            observations=(),
+            step=1,
+            max_steps=30,
+        )
+        error = DeepSeekProvider._validation_error(
+            context,
+            FinalAction(outcome="needs_information", message="Task completed."),
+        )
+
+        self.assertIsNotNone(error)
 
 
 if __name__ == "__main__":

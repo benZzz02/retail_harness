@@ -246,19 +246,66 @@ class DeepSeekProvider(CodexCliProvider):
         multi_turn: bool = False,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        max_retries: int = 2,
     ) -> None:
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
         self.additional_instructions = additional_instructions
         self.multi_turn = multi_turn
+        self.max_retries = max(0, max_retries)
         self.name = "deepseek:%s" % model
         self._client = DeepSeekStructuredClient(
             model=model,
             api_key=api_key,
             base_url=base_url,
             timeout_seconds=timeout_seconds,
+            strict_schema=True,
         )
         self._schema_path = (
             Path(__file__).resolve().parent / "data" / "agent_action.schema.json"
         )
+
+    @staticmethod
+    def _validation_error(context: AgentContext, action: AgentAction) -> Optional[str]:
+        if not isinstance(action, FinalAction):
+            return None
+        normalized = " ".join(action.message.lower().split()).strip(".!?")
+        if normalized in {"task completed", "completed", "done"}:
+            if action.outcome == "needs_information":
+                return (
+                    "This is not a valid information request. Ask one concrete "
+                    "question or request confirmation; never use a completion "
+                    "placeholder for needs_information."
+                )
+            if context.step == 1 or not context.observations:
+                return (
+                    "Do not claim completion before inspecting the customer "
+                    "request and taking any required tool actions."
+                )
+        return None
+
+    def _strict_prompt(self, prompt: str, feedback: str = "") -> str:
+        instruction = (
+            "DeepSeek action contract: output one schema-valid action. Never use "
+            "'Task completed.' as a placeholder. For needs_information, the "
+            "message must ask a concrete question or request explicit approval. "
+            "Only report completion after the required state-changing tool has "
+            "successfully executed; otherwise continue querying or ask the user."
+        )
+        if feedback:
+            instruction += " Previous output was rejected: " + feedback
+        return prompt + "\n\n" + instruction
+
+    def next_action(self, context: AgentContext) -> AgentAction:
+        feedback = ""
+        for _ in range(self.max_retries + 1):
+            raw = self._client.complete(
+                self._strict_prompt(self._build_prompt(context), feedback),
+                self._schema_path,
+            )
+            action = self.decode_action(raw)
+            feedback = self._validation_error(context, action) or ""
+            if not feedback:
+                return action
+        raise ValueError("DeepSeek action failed semantic validation: %s" % feedback)
