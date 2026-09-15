@@ -15,6 +15,7 @@ from .contracts import (
     ToolObservation,
 )
 from .codex_client import CodexStructuredClient
+from .deepseek_client import DeepSeekStructuredClient
 
 
 class AgentProvider(Protocol):
@@ -231,3 +232,33 @@ class CodexCliProvider:
     def next_action(self, context: AgentContext) -> AgentAction:
         raw = self._client.complete(self._build_prompt(context), self._schema_path)
         return self.decode_action(raw)
+
+
+class DeepSeekProvider(CodexCliProvider):
+    """Use DeepSeek's JSON-output API at the same action boundary as Codex."""
+
+    def __init__(
+        self,
+        model: str = "deepseek-chat",
+        reasoning_effort: str = "low",
+        timeout_seconds: int = 180,
+        additional_instructions: str = "",
+        multi_turn: bool = False,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> None:
+        self.model = model
+        self.reasoning_effort = reasoning_effort
+        self.timeout_seconds = timeout_seconds
+        self.additional_instructions = additional_instructions
+        self.multi_turn = multi_turn
+        self.name = "deepseek:%s" % model
+        self._client = DeepSeekStructuredClient(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+        self._schema_path = (
+            Path(__file__).resolve().parent / "data" / "agent_action.schema.json"
+        )

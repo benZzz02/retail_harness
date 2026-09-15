@@ -2,15 +2,22 @@
 
 from .cases import load_cases
 from .environment import RetailEnvironment
-from .provider import CodexCliProvider, OracleReplayProvider, RuleBasedProvider
+from .provider import (
+    CodexCliProvider,
+    DeepSeekProvider,
+    OracleReplayProvider,
+    RuleBasedProvider,
+)
 from .runtime import HarnessRuntime
 from .tau_adapter import TauRetailEnvironment
 from .tau_runtime import TauDialogueRuntime, TauHarnessRuntime
-from .user_simulator import CodexCliUserSimulator
+from .user_simulator import CodexCliUserSimulator, DeepSeekUserSimulator
 
 __all__ = [
     "CodexCliProvider",
     "CodexCliUserSimulator",
+    "DeepSeekProvider",
+    "DeepSeekUserSimulator",
     "HarnessRuntime",
     "OracleReplayProvider",
     "RetailEnvironment",

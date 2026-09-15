@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .codex_client import CodexStructuredClient
+from .deepseek_client import DeepSeekStructuredClient
 
 
 class CodexCliUserSimulator:
@@ -208,3 +209,30 @@ class CodexCliUserSimulator:
     def get_total_cost(self) -> float:
         # Codex account usage is not exposed as a per-call currency amount.
         return 0.0
+
+
+class DeepSeekUserSimulator(CodexCliUserSimulator):
+    """Use DeepSeek for the hidden-instruction user simulator."""
+
+    def __init__(
+        self,
+        model: str = "deepseek-chat",
+        reasoning_effort: str = "low",
+        timeout_seconds: int = 180,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ) -> None:
+        self.model = model
+        self.name = "deepseek-user-simulator:%s+grounded-auth" % model
+        self._client = DeepSeekStructuredClient(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+        )
+        self._schema_path = (
+            Path(__file__).resolve().parent / "data" / "user_turn.schema.json"
+        )
+        self._instruction = ""
+        self.transcript: List[Dict[str, str]] = []
+        self.call_count = 0

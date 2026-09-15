@@ -14,7 +14,12 @@ from .contracts import RunResult, TaskCase
 from .evaluate import aggregate_evaluations, evaluate_run
 from .environment import RetailEnvironment
 from .events import load_events
-from .provider import CodexCliProvider, OracleReplayProvider, RuleBasedProvider
+from .provider import (
+    CodexCliProvider,
+    DeepSeekProvider,
+    OracleReplayProvider,
+    RuleBasedProvider,
+)
 from .runtime import HarnessRuntime
 from .tau_adapter import TauBenchUnavailable, TauRetailEnvironment
 from .tau_runtime import (
@@ -22,7 +27,41 @@ from .tau_runtime import (
     TauHarnessRuntime,
     TauRunResult,
 )
-from .user_simulator import CodexCliUserSimulator
+from .user_simulator import CodexCliUserSimulator, DeepSeekUserSimulator
+
+
+def _agent_provider(
+    provider_name: str,
+    model: str,
+    reasoning_effort: str,
+    multi_turn: bool = False,
+    additional_instructions: str = "",
+):
+    if provider_name == "deepseek":
+        return DeepSeekProvider(
+            model=model,
+            reasoning_effort=reasoning_effort,
+            multi_turn=multi_turn,
+            additional_instructions=additional_instructions,
+        )
+    return CodexCliProvider(
+        model=model,
+        reasoning_effort=reasoning_effort,
+        multi_turn=multi_turn,
+        additional_instructions=additional_instructions,
+    )
+
+
+def _user_simulator(provider_name: str, model: str, reasoning_effort: str):
+    if provider_name == "deepseek":
+        return DeepSeekUserSimulator(
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    return CodexCliUserSimulator(
+        model=model,
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def _compact_output(tool_name: str, result: Dict[str, Any]) -> str:
@@ -249,6 +288,7 @@ def _tau_llm(
     runtime_dir: Path,
     task_split: str,
     task_index: int,
+    provider_name: str,
     model: str,
     reasoning_effort: str,
     max_steps: int,
@@ -260,7 +300,8 @@ def _tau_llm(
     )
     try:
         environment = TauRetailEnvironment(task_split, task_index)
-        provider = CodexCliProvider(
+        provider = _agent_provider(
+            provider_name=provider_name,
             model=model,
             reasoning_effort=reasoning_effort,
             additional_instructions=(
@@ -316,6 +357,8 @@ def _tau_dialogue(
     runtime_dir: Path,
     task_split: str,
     task_index: int,
+    agent_provider_name: str,
+    user_provider_name: str,
     agent_model: str,
     user_model: str,
     reasoning_effort: str,
@@ -328,7 +371,8 @@ def _tau_dialogue(
     )
     try:
         environment = TauRetailEnvironment(task_split, task_index)
-        provider = CodexCliProvider(
+        provider = _agent_provider(
+            provider_name=agent_provider_name,
             model=agent_model,
             reasoning_effort=reasoning_effort,
             multi_turn=True,
@@ -342,7 +386,8 @@ def _tau_dialogue(
                 "will then reply or stop."
             ),
         )
-        user_simulator = CodexCliUserSimulator(
+        user_simulator = _user_simulator(
+            provider_name=user_provider_name,
             model=user_model,
             reasoning_effort=reasoning_effort,
         )
@@ -441,6 +486,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--split", choices=("train", "dev", "test"), default="test"
     )
     tau_llm_parser.add_argument("--task", type=int, default=0)
+    tau_llm_parser.add_argument(
+        "--provider", choices=("codex", "deepseek"), default="codex"
+    )
     tau_llm_parser.add_argument("--model", default="gpt-5.6-luna")
     tau_llm_parser.add_argument(
         "--reasoning", choices=("low", "medium", "high"), default="low"
@@ -453,6 +501,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--split", choices=("train", "dev", "test"), default="test"
     )
     tau_dialogue_parser.add_argument("--task", type=int, default=0)
+    tau_dialogue_parser.add_argument(
+        "--agent-provider", choices=("codex", "deepseek"), default="codex"
+    )
+    tau_dialogue_parser.add_argument(
+        "--user-provider", choices=("codex", "deepseek"), default="codex"
+    )
     tau_dialogue_parser.add_argument("--agent-model", default="gpt-5.6-luna")
     tau_dialogue_parser.add_argument("--user-model", default="gpt-5.6-luna")
     tau_dialogue_parser.add_argument(
@@ -483,6 +537,7 @@ def main(argv: Iterable[str] = None) -> int:
             args.runtime_dir,
             args.split,
             args.task,
+            args.provider,
             args.model,
             args.reasoning,
             args.max_steps,
@@ -492,6 +547,8 @@ def main(argv: Iterable[str] = None) -> int:
             args.runtime_dir,
             args.split,
             args.task,
+            args.agent_provider,
+            args.user_provider,
             args.agent_model,
             args.user_model,
             args.reasoning,

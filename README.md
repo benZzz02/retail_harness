@@ -60,6 +60,21 @@ simulator，命令把初始明确请求视为最终授权，因此这是 one-tur
 ./scripts/run_tau_llm_first10.sh
 ```
 
+使用 DeepSeek API 做相同的 blind one-turn 运行：
+
+```bash
+export DEEPSEEK_API_KEY="<your-key>"
+.venv/bin/python -m refundpilot tau-llm \
+  --provider deepseek --model deepseek-chat \
+  --split test --task 0
+```
+
+DeepSeek 适配器使用官方 OpenAI-compatible Chat Completions endpoint 和 JSON
+Output；也可以通过 `DEEPSEEK_BASE_URL` 指向兼容的代理服务。API key 只从环境变量
+读取，不会写入轨迹或仓库。接口说明见
+[DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)
+和 [JSON Output](https://api-docs.deepseek.com/guides/json_mode/)。
+
 一次真实 pilot 得到 5/10、70 次工具调用、0 次无效工具调用。后五题主要因缺少
 确认后的用户改口而终态不匹配；详细协议和逐题诊断见
 [`reports/llm_test_0_9_20260913.md`](reports/llm_test_0_9_20260913.md)。这个数字
@@ -92,6 +107,19 @@ grounded 层：只使用隐藏指令里明确给出的 email，或从 benchmark 
 回归通过。完整逐题结果、失败证据和口径说明见
 [`reports/dialogue_test_0_9_20260914.md`](reports/dialogue_test_0_9_20260914.md)。
 这仍是 legacy 数据上的小样本 pilot，不是正式榜单成绩。
+
+多轮模式可以独立选择 Agent 和用户模拟器模型：
+
+```bash
+export DEEPSEEK_API_KEY="<your-key>"
+.venv/bin/python -m refundpilot tau-dialogue \
+  --agent-provider deepseek --agent-model deepseek-chat \
+  --user-provider codex --user-model gpt-5.6-luna \
+  --split test --task 0 --reasoning low
+```
+
+如果需要两边都使用 DeepSeek，将 `--user-provider deepseek --user-model
+deepseek-chat` 即可。原有 Codex 命令和默认行为保持不变。
 
 命令结束会打印 session id。轨迹可回放：
 
@@ -196,6 +224,9 @@ class MyLLMProvider:
         # 输出：ToolAction(...) 或 FinalAction(...)
         ...
 ```
+
+当前仓库已提供 `DeepSeekProvider` 和 `DeepSeekUserSimulator`，无需修改
+Retail 环境、工具协议或评测器即可切换模型。
 
 接模型后应单独报告 blind task success / pass^k，不能混用本项目的 oracle wiring
 结果。
