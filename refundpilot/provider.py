@@ -458,7 +458,11 @@ class DeepSeekProvider(CodexCliProvider):
             "'Task completed.' as a placeholder. For needs_information, the "
             "message must ask a concrete question or request explicit approval. "
             "Only report completion after the required state-changing tool has "
-            "successfully executed; otherwise continue querying or ask the user."
+            "successfully executed; otherwise continue querying or ask the user. "
+            "The external Retail exchange tool also supports a same-variant "
+            "replacement when the customer explicitly requests it: preserve the "
+            "same item id in item_ids and new_item_ids after confirmation instead "
+            "of transferring solely because the option is identical."
         )
         if feedback:
             instruction += " Previous output was rejected: " + feedback
