@@ -218,7 +218,10 @@ class CodexCliProvider:
                 "requested comparison, amount, and alternative, even when only one "
                 "operation is ultimately executed. For every currency sum, "
                 "difference, refund, or savings total, call the calculate tool "
-                "before stating the amount; do not do financial arithmetic mentally."
+                "before stating the amount; do not do financial arithmetic mentally. "
+                "For inventory counts, count the variants and their explicit "
+                "available fields from the product-details observation exactly; "
+                "never estimate stock counts or infer them from a single variant."
             if self.multi_turn
             else (
                 "Use type=final when the task is complete. A final message must "
