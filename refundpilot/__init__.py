@@ -4,6 +4,7 @@ from .budget import RunBudget, UsageLedger
 from .cases import load_cases
 from .context_view import build_context_payload
 from .environment import RetailEnvironment
+from .memory import MemoryStore, TaskMemory
 from .policy import GateDecision, RetailActionGate
 from .provider import (
     CodexCliProvider,
@@ -26,11 +27,13 @@ __all__ = [
     "OracleReplayProvider",
     "RetailEnvironment",
     "RetailActionGate",
+    "MemoryStore",
     "RunBudget",
     "RuleBasedProvider",
     "TauHarnessRuntime",
     "TauDialogueRuntime",
     "TauRetailEnvironment",
+    "TaskMemory",
     "UsageLedger",
     "build_context_payload",
     "load_cases",

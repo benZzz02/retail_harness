@@ -9,6 +9,7 @@ from refundpilot.budget import RunBudget
 from refundpilot.contracts import AgentContext, FinalAction, ToolAction, ToolObservation
 from refundpilot.context_view import build_context_payload
 from refundpilot.events import load_events
+from refundpilot.memory import MemoryStore, TaskMemory
 from refundpilot.policy import GATE_TOOL_NAME, RetailActionGate
 from refundpilot.tau_runtime import TauHarnessRuntime
 
@@ -55,6 +56,44 @@ def _context(
 
 
 class HarnessV2Test(unittest.TestCase):
+    def test_memory_rehydrates_state_and_removes_duplicate_order_payload(self) -> None:
+        observation = _order_observation()
+        memory = TaskMemory("v2-memory")
+        memory.start("Cancel order #W1")
+        memory.record_observation(observation)
+        context = _context(observations=(observation,))
+        context = AgentContext(
+            session_id=context.session_id,
+            user_request=context.user_request,
+            tool_schemas=context.tool_schemas,
+            observations=context.observations,
+            step=context.step,
+            max_steps=context.max_steps,
+            system_instructions=context.system_instructions,
+            conversation=context.conversation,
+            memory=memory.to_prompt_dict(),
+        )
+
+        compact = build_context_payload(context, compact=True)
+
+        self.assertIn("#W1", compact["task_memory"]["orders"])
+        self.assertEqual(
+            compact["observations"][0]["observation_ref"],
+            "task_memory.orders.#W1",
+        )
+
+    def test_memory_checkpoint_round_trips(self) -> None:
+        memory = TaskMemory("v2-checkpoint")
+        memory.start("Cancel order #W1")
+        memory.record_user_turn("Please cancel order #W1.")
+        with tempfile.TemporaryDirectory() as directory:
+            store = MemoryStore(Path(directory) / "memory.json")
+            store.save(memory)
+            restored = store.load()
+
+        self.assertEqual(restored["session_id"], "v2-checkpoint")
+        self.assertEqual(restored["goal"]["original_request"], "Cancel order #W1")
+
     def test_compact_context_removes_duplicate_tool_payload(self) -> None:
         observation = _order_observation()
         context = _context(
@@ -250,6 +289,7 @@ class HarnessV2Test(unittest.TestCase):
         self.assertEqual(result.observations[0].tool_name, GATE_TOOL_NAME)
         self.assertTrue(any(event["type"] == "gate_rejected" for event in events))
         self.assertEqual(result.budget["model_calls"], 0)
+        self.assertEqual(result.memory["orders"]["#W1"]["order_id"], "#W1")
 
 
 if __name__ == "__main__":

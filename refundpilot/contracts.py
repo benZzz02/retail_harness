@@ -88,6 +88,7 @@ class AgentContext:
     max_steps: int
     system_instructions: str = ""
     conversation: Tuple[Dict[str, Any], ...] = ()
+    memory: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -21,7 +21,9 @@ def _parsed_observation(observation: ToolObservation) -> Any:
     return output
 
 
-def _compact_observation(observation: ToolObservation) -> Dict[str, Any]:
+def _compact_observation(
+    observation: ToolObservation, memory: Dict[str, Any]
+) -> Dict[str, Any]:
     result = observation.result
     if not result.get("ok"):
         return {
@@ -31,13 +33,24 @@ def _compact_observation(observation: ToolObservation) -> Dict[str, Any]:
             "error_code": result.get("error_code"),
             "error_message": result.get("error_message"),
         }
-    return {
+    compact = {
         "tool_name": observation.tool_name,
         "arguments": dict(observation.arguments),
         "ok": True,
         "done": bool(result.get("done")),
         "observation": _parsed_observation(observation),
     }
+    if observation.tool_name == "get_order_details":
+        order_id = observation.arguments.get("order_id")
+        if isinstance(order_id, str) and order_id in memory.get("orders", {}):
+            compact.pop("observation", None)
+            compact["observation_ref"] = "task_memory.orders.%s" % order_id
+    elif observation.tool_name == "get_product_details":
+        product_id = observation.arguments.get("product_id")
+        if isinstance(product_id, str) and product_id in memory.get("products", {}):
+            compact.pop("observation", None)
+            compact["observation_ref"] = "task_memory.products.%s" % product_id
+    return compact
 
 
 def _compact_conversation(context: AgentContext) -> List[Dict[str, Any]]:
@@ -68,11 +81,14 @@ def _compact_conversation(context: AgentContext) -> List[Dict[str, Any]]:
 
 
 def build_context_payload(context: AgentContext, compact: bool = True) -> Dict[str, Any]:
+    memory = dict(context.memory or {})
     if not compact:
         observations = [item.to_dict() for item in context.observations]
         conversation = list(context.conversation)
     else:
-        observations = [_compact_observation(item) for item in context.observations]
+        observations = [
+            _compact_observation(item, memory) for item in context.observations
+        ]
         conversation = _compact_conversation(context)
     return {
         "step": context.step,
@@ -82,4 +98,5 @@ def build_context_payload(context: AgentContext, compact: bool = True) -> Dict[s
         "conversation": conversation,
         "available_tools": list(context.tool_schemas),
         "observations": observations,
+        "task_memory": memory,
     }

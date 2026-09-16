@@ -11,6 +11,7 @@ from uuid import uuid4
 from .contracts import AgentContext, FinalAction, ToolAction, ToolObservation
 from .budget import RunBudget
 from .events import EventLogger
+from .memory import MemoryStore, TaskMemory
 from .policy import GATE_TOOL_NAME, RetailActionGate, gate_observation
 from .provider import AgentProvider
 from .tau_adapter import TauRetailEnvironment
@@ -47,6 +48,8 @@ class TauRunResult:
     event_path: Path
     gate_rejections: int = 0
     budget: Dict[str, Any] = field(default_factory=dict)
+    memory_path: Path | None = None
+    memory: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def wiring_ok(self) -> bool:
@@ -73,6 +76,8 @@ class TauRunResult:
             "reward_info": dict(self.reward_info),
             "gate_rejections": self.gate_rejections,
             "budget": dict(self.budget),
+            "memory_path": str(self.memory_path) if self.memory_path else None,
+            "memory": dict(self.memory),
             "wiring_ok": self.wiring_ok,
             "event_path": str(self.event_path),
         }
@@ -122,6 +127,10 @@ class TauHarnessRuntime:
         steps = 0
         gate_rejections = 0
         budget = RunBudget(max_model_calls=self.max_model_calls)
+        memory = TaskMemory(session_id)
+        memory.start(environment.instruction)
+        memory_store = MemoryStore(event_path.with_name("memory.json"))
+        memory_store.save(memory)
         description = environment.describe()
         initial_hash = environment.data_hash()
 
@@ -137,6 +146,7 @@ class TauHarnessRuntime:
                 "evaluation_label": "wiring_only"
                 if self.provider.name == "tau-oracle-wiring-smoke"
                 else "agent_run",
+                "memory_version": memory.version,
             },
         )
 
@@ -158,15 +168,23 @@ class TauHarnessRuntime:
                     step=step,
                     max_steps=self.max_steps,
                     system_instructions=environment.policy,
+                    memory=memory.to_prompt_dict(),
                 )
                 try:
                     action = self.provider.next_action(context)
                 finally:
                     if _model_backed(self.provider):
                         budget.record(_client_metrics(self.provider), "agent")
+                memory.record_action(action)
                 logger.append("agent_action", action.to_dict())
 
                 decision = self.action_gate.check(context, action)
+                memory.record_gate(
+                    action,
+                    decision,
+                    require_confirmation=self.action_gate.require_confirmation,
+                )
+                memory_store.save(memory)
                 if not decision.allowed:
                     gate_rejections += 1
                     gate_payload = {
@@ -185,6 +203,8 @@ class TauHarnessRuntime:
                         continue
 
                 if isinstance(action, FinalAction):
+                    memory.record_agent_message(action.message)
+                    memory_store.save(memory)
                     environment.record_agent_response(action.message)
                     outcome = action.outcome
                     message = action.message
@@ -197,6 +217,8 @@ class TauHarnessRuntime:
 
                 observation = environment.step(action)
                 observations.append(observation)
+                memory.record_observation(observation)
+                memory_store.save(memory)
                 logger.append("tool_result", observation.to_dict())
                 if observation.result.get("done"):
                     outcome = "environment_done"
@@ -224,6 +246,8 @@ class TauHarnessRuntime:
                 ),
                 "gate_rejections": gate_rejections,
                 "budget": budget.to_dict(),
+                "memory_version": memory.version,
+                "memory_path": str(memory_store.path),
                 "post_action_data_hash": post_action_hash,
                 "official_reward": official_reward,
             },
@@ -244,6 +268,8 @@ class TauHarnessRuntime:
             event_path=event_path,
             gate_rejections=gate_rejections,
             budget=budget.to_dict(),
+            memory_path=memory_store.path,
+            memory=memory.to_dict(),
         )
 
 
@@ -267,6 +293,8 @@ class TauDialogueResult:
     event_path: Path
     gate_rejections: int = 0
     budget: Dict[str, Any] = field(default_factory=dict)
+    memory_path: Path | None = None
+    memory: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def task_success(self) -> bool:
@@ -301,6 +329,8 @@ class TauDialogueResult:
             "actual_data_hash": self.actual_data_hash,
             "gate_rejections": self.gate_rejections,
             "budget": dict(self.budget),
+            "memory_path": str(self.memory_path) if self.memory_path else None,
+            "memory": dict(self.memory),
             "task_success": self.task_success,
             "event_path": str(self.event_path),
         }
@@ -345,6 +375,9 @@ class TauDialogueRuntime:
         premature_completion_continuations = 0
         gate_rejections = 0
         budget = RunBudget(max_model_calls=self.max_model_calls)
+        memory = TaskMemory(session_id)
+        memory_store = MemoryStore(event_path.with_name("memory.json"))
+        memory_store.save(memory)
 
         logger.append(
             "session_started",
@@ -358,6 +391,7 @@ class TauDialogueRuntime:
                 "max_model_calls": self.max_model_calls,
                 "evaluation_label": "multi_turn_agent_run",
                 "agent_context": "current user utterance and visible transcript only",
+                "memory_version": memory.version,
             },
         )
 
@@ -380,6 +414,8 @@ class TauDialogueRuntime:
                         budget.record(_client_metrics(self.user_simulator), "user")
             user_turns = 1
             if current_user_message:
+                memory.record_user_turn(current_user_message)
+                memory_store.save(memory)
                 conversation.append(
                     {"role": "user", "content": current_user_message}
                 )
@@ -408,15 +444,23 @@ class TauDialogueRuntime:
                     max_steps=self.max_steps,
                     system_instructions=environment.policy,
                     conversation=tuple(dict(item) for item in conversation),
+                    memory=memory.to_prompt_dict(),
                 )
                 try:
                     action = self.provider.next_action(context)
                 finally:
                     if _model_backed(self.provider):
                         budget.record(_client_metrics(self.provider), "agent")
+                memory.record_action(action)
                 logger.append("agent_action", action.to_dict())
 
                 decision = self.action_gate.check(context, action)
+                memory.record_gate(
+                    action,
+                    decision,
+                    require_confirmation=self.action_gate.require_confirmation,
+                )
+                memory_store.save(memory)
                 if not decision.allowed:
                     gate_rejections += 1
                     gate_payload = {
@@ -445,6 +489,8 @@ class TauDialogueRuntime:
                 if isinstance(action, ToolAction):
                     observation = environment.step(action)
                     observations.append(observation)
+                    memory.record_observation(observation)
+                    memory_store.save(memory)
                     logger.append("tool_result", observation.to_dict())
                     conversation.extend(
                         [
@@ -473,6 +519,8 @@ class TauDialogueRuntime:
                 conversation.append(
                     {"role": "assistant", "content": action.message}
                 )
+                memory.record_agent_message(action.message)
+                memory_store.save(memory)
                 user_call_required = _model_backed(self.user_simulator)
                 if user_call_required and hasattr(
                     self.user_simulator, "will_call_model"
@@ -497,6 +545,8 @@ class TauDialogueRuntime:
                 conversation.append(
                     {"role": "user", "content": current_user_message}
                 )
+                memory.record_user_turn(current_user_message)
+                memory_store.save(memory)
                 logger.append(
                     "user_message",
                     {
@@ -545,6 +595,8 @@ class TauDialogueRuntime:
                 ),
                 "gate_rejections": gate_rejections,
                 "budget": budget.to_dict(),
+                "memory_version": memory.version,
+                "memory_path": str(memory_store.path),
                 "official_reward": official_reward,
             },
         )
@@ -569,4 +621,6 @@ class TauDialogueRuntime:
             event_path=event_path,
             gate_rejections=gate_rejections,
             budget=budget.to_dict(),
+            memory_path=memory_store.path,
+            memory=memory.to_dict(),
         )
